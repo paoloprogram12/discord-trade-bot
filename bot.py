@@ -12,6 +12,7 @@ TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
 intents = discord.Intents.default()
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Each session has its own timezone and local open/close time.
@@ -51,6 +52,10 @@ last_ping_date = {}
 def is_weekday(local_dt: datetime.datetime) -> bool:
     # Monday = 0 ... Sunday = 6
     return local_dt.weekday() < 5
+
+@bot.command(name="test")
+async def testping(ctx):
+    await ctx.send("@everyone this a test")
 
 
 @tasks.loop(seconds=30)
