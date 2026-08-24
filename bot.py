@@ -11,60 +11,92 @@ load_dotenv()
 TOKEN = os.environ["DISCORD_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-EASTERN = pytz.timezone("US/Eastern")
-MARKET_OPEN = datetime.time(9, 30)
-MARKET_CLOSE = datetime.time(16, 0)
-
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Tracks the last date we sent an open/close ping, so we don't double-send
-# if the loop happens to tick more than once inside the same minute.
-last_open_ping_date = None
-last_close_ping_date = None
+# Each session has its own timezone and local open/close time.
+# Add or edit entries here to change session hours.
+SESSIONS = [
+    {
+        "name": "Asia",
+        "tz": pytz.timezone("Asia/Tokyo"),
+        "open": datetime.time(9, 0),
+        "close": datetime.time(15, 0),
+        "emoji_open": "🌅",
+        "emoji_close": "🌙",
+    },
+    {
+        "name": "London",
+        "tz": pytz.timezone("Europe/London"),
+        "open": datetime.time(8, 0),
+        "close": datetime.time(16, 30),
+        "emoji_open": "🇬🇧",
+        "emoji_close": "🇬🇧",
+    },
+    {
+        "name": "New York",
+        "tz": pytz.timezone("US/Eastern"),
+        "open": datetime.time(9, 30),
+        "close": datetime.time(16, 0),
+        "emoji_open": "🗽",
+        "emoji_close": "🗽",
+    },
+]
 
-def is_weekday(now_eastern: datetime.datetime) -> bool:
+# Tracks last date we pinged for each session/event, keyed by "SessionName-open" / "SessionName-close",
+# so we don't double-send if the loop ticks more than once inside the same minute.
+last_ping_date = {}
+
+
+def is_weekday(local_dt: datetime.datetime) -> bool:
     # Monday = 0 ... Sunday = 6
-    return now_eastern.weekday() < 5
+    return local_dt.weekday() < 5
+
 
 @tasks.loop(seconds=30)
-async def market_clock():
-    global last_open_ping_date, last_close_ping_date
-
-    now_eastern = datetime.datetime.now(EASTERN)
-    today = now_eastern.date()
-    current_time = now_eastern.time()
-
-    if not is_weekday(now_eastern):
-        return
-
+async def session_clock():
     channel = bot.get_channel(CHANNEL_ID)
     if channel is None:
         print(f"Couldn't find channel with ID {CHANNEL_ID}")
         return
 
-    # Market open: fire once, right at/after 9:30
-    if current_time >= MARKET_OPEN and last_open_ping_date != today:
-        if current_time < datetime.time(9, 31):  # narrow window so a bot restart doesn't spam-fire hours later
-            await channel.send("@everyone 🔔 **Market is open.** Get to trading.")
-            last_open_ping_date = today
+    for session in SESSIONS:
+        local_dt = datetime.datetime.now(session["tz"])
+        if not is_weekday(local_dt):
+            continue
 
-    # Market close: fire once, right at/after 16:00
-    if current_time >= MARKET_CLOSE and last_close_ping_date != today:
-        if current_time < datetime.time(16, 1):
-            await channel.send("@everyone 🔒 **Market is closed.** Geeg.")
-            last_close_ping_date = today
+        today = local_dt.date()
+        current_time = local_dt.time()
+        name = session["name"]
 
-@market_clock.before_loop
-async def before_market_clock():
+        open_key = f"{name}-open"
+        close_key = f"{name}-close"
+
+        # Open ping: fire once, in the minute right after open time
+        if current_time >= session["open"] and last_ping_date.get(open_key) != today:
+            open_end = (datetime.datetime.combine(today, session["open"]) + datetime.timedelta(minutes=1)).time()
+            if current_time < open_end:
+                await channel.send(f"@everyone {session['emoji_open']} **{name} session is open.**")
+                last_ping_date[open_key] = today
+
+        # Close ping: fire once, in the minute right after close time
+        if current_time >= session["close"] and last_ping_date.get(close_key) != today:
+            close_end = (datetime.datetime.combine(today, session["close"]) + datetime.timedelta(minutes=1)).time()
+            if current_time < close_end:
+                await channel.send(f"@everyone {session['emoji_close']} **{name} session is closed.**")
+                last_ping_date[close_key] = today
+
+
+@session_clock.before_loop
+async def before_session_clock():
     await bot.wait_until_ready()
 
 
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
-    if not market_clock.is_running():
-        market_clock.start()
+    if not session_clock.is_running():
+        session_clock.start()
 
 
 bot.run(TOKEN)
