@@ -44,6 +44,56 @@ SESSIONS = [
     },
 ]
 
+# Holiday dates when each exchange is fully closed, keyed by session name.
+# These need to be updated once a year (dates are published well in advance
+# by each exchange). Approximate for London/Asia; exact for NYSE/CME hours,
+# since that's the one most futures traders care most about.
+HOLIDAYS = {
+    "New York": {
+        datetime.date(2026, 1, 1),   # New Year's Day
+        datetime.date(2026, 1, 19),  # MLK Day
+        datetime.date(2026, 2, 16),  # Presidents' Day
+        datetime.date(2026, 4, 3),   # Good Friday
+        datetime.date(2026, 5, 25),  # Memorial Day
+        datetime.date(2026, 6, 19),  # Juneteenth
+        datetime.date(2026, 7, 3),   # Independence Day (observed)
+        datetime.date(2026, 9, 7),   # Labor Day
+        datetime.date(2026, 11, 26), # Thanksgiving
+        datetime.date(2026, 12, 25), # Christmas
+    },
+    "London": {
+        datetime.date(2026, 1, 1),   # New Year's Day
+        datetime.date(2026, 4, 3),   # Good Friday
+        datetime.date(2026, 4, 6),   # Easter Monday
+        datetime.date(2026, 5, 4),   # Early May Bank Holiday
+        datetime.date(2026, 5, 25),  # Spring Bank Holiday
+        datetime.date(2026, 8, 31),  # Summer Bank Holiday
+        datetime.date(2026, 12, 25), # Christmas
+        datetime.date(2026, 12, 28), # Boxing Day (observed)
+    },
+    "Asia": {
+        datetime.date(2026, 1, 1),   # New Year's Day
+        datetime.date(2026, 1, 2),   # New Year's Day (observed)
+        datetime.date(2026, 2, 11),  # National Foundation Day
+        datetime.date(2026, 3, 20),  # Vernal Equinox
+        datetime.date(2026, 4, 29),  # Showa Day
+        datetime.date(2026, 5, 4),   # Greenery Day
+        datetime.date(2026, 5, 5),   # Children's Day
+        datetime.date(2026, 5, 6),   # Constitution Day (observed)
+        datetime.date(2026, 7, 20),  # Marine Day
+        datetime.date(2026, 8, 11),  # Mountain Day
+        datetime.date(2026, 9, 21),  # Respect for the Aged Day
+        datetime.date(2026, 9, 22),  # Autumnal Equinox
+        datetime.date(2026, 10, 12), # Health and Sports Day
+        datetime.date(2026, 11, 3),  # Culture Day
+        datetime.date(2026, 11, 23), # Labor Thanksgiving Day
+        datetime.date(2026, 12, 23), # Emperor's Birthday
+    },
+}
+
+def is_holiday(name: str, today: datetime.date) -> bool:
+    return today in HOLIDAYS.get(name, set())
+
 # Tracks last date we pinged for each session/event, keyed by "SessionName-open" / "SessionName-close",
 # so we don't double-send if the loop ticks more than once inside the same minute.
 last_ping_date = {}
@@ -71,6 +121,10 @@ async def session_clock():
             continue
 
         today = local_dt.date()
+
+        if is_holiday(session["name"], today):
+            continue
+
         current_time = local_dt.time()
         name = session["name"]
 
