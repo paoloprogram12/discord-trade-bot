@@ -188,8 +188,12 @@ async def before_session_clock():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash command(s)")
+    except Exception as e:
+        print(f"Failed to sync slash commands: {e}")
     if not session_clock.is_running():
         session_clock.start()
-
 
 bot.run(TOKEN)
