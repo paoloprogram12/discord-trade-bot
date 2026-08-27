@@ -184,6 +184,7 @@ async def session_clock():
 async def before_session_clock():
     await bot.wait_until_ready()
 
+GUILD_ID = os.environ.get("GUILD_ID")  # your server's ID, for instant command sync
 
 @bot.event
 async def on_ready():
