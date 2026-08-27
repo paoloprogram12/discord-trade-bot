@@ -5,6 +5,7 @@ import discord
 from discord.ext import tasks, commands
 from dotenv import load_dotenv
 import pytz
+import pandas_market_calendars as mcal
 
 load_dotenv()
 
@@ -44,55 +45,34 @@ SESSIONS = [
     },
 ]
 
-# Holiday dates when each exchange is fully closed, keyed by session name.
-# These need to be updated once a year (dates are published well in advance
-# by each exchange). Approximate for London/Asia; exact for NYSE/CME hours,
-# since that's the one most futures traders care most about.
-HOLIDAYS = {
-    "New York": {
-        datetime.date(2026, 1, 1),   # New Year's Day
-        datetime.date(2026, 1, 19),  # MLK Day
-        datetime.date(2026, 2, 16),  # Presidents' Day
-        datetime.date(2026, 4, 3),   # Good Friday
-        datetime.date(2026, 5, 25),  # Memorial Day
-        datetime.date(2026, 6, 19),  # Juneteenth
-        datetime.date(2026, 7, 3),   # Independence Day (observed)
-        datetime.date(2026, 9, 7),   # Labor Day
-        datetime.date(2026, 11, 26), # Thanksgiving
-        datetime.date(2026, 12, 25), # Christmas
-    },
-    "London": {
-        datetime.date(2026, 1, 1),   # New Year's Day
-        datetime.date(2026, 4, 3),   # Good Friday
-        datetime.date(2026, 4, 6),   # Easter Monday
-        datetime.date(2026, 5, 4),   # Early May Bank Holiday
-        datetime.date(2026, 5, 25),  # Spring Bank Holiday
-        datetime.date(2026, 8, 31),  # Summer Bank Holiday
-        datetime.date(2026, 12, 25), # Christmas
-        datetime.date(2026, 12, 28), # Boxing Day (observed)
-    },
-    "Asia": {
-        datetime.date(2026, 1, 1),   # New Year's Day
-        datetime.date(2026, 1, 2),   # New Year's Day (observed)
-        datetime.date(2026, 2, 11),  # National Foundation Day
-        datetime.date(2026, 3, 20),  # Vernal Equinox
-        datetime.date(2026, 4, 29),  # Showa Day
-        datetime.date(2026, 5, 4),   # Greenery Day
-        datetime.date(2026, 5, 5),   # Children's Day
-        datetime.date(2026, 5, 6),   # Constitution Day (observed)
-        datetime.date(2026, 7, 20),  # Marine Day
-        datetime.date(2026, 8, 11),  # Mountain Day
-        datetime.date(2026, 9, 21),  # Respect for the Aged Day
-        datetime.date(2026, 9, 22),  # Autumnal Equinox
-        datetime.date(2026, 10, 12), # Health and Sports Day
-        datetime.date(2026, 11, 3),  # Culture Day
-        datetime.date(2026, 11, 23), # Labor Thanksgiving Day
-        datetime.date(2026, 12, 23), # Emperor's Birthday
-    },
+# Each session maps to an official exchange calendar, which
+# pandas_market_calendars keeps updated with published holiday schedules —
+# no manual date maintenance needed.
+CALENDARS = {
+    "Asia": mcal.get_calendar("JPX"),
+    "London": mcal.get_calendar("LSE"),
+    "New York": mcal.get_calendar("CME_Equity"),
 }
 
+# Cache of holiday dates per session per year, so we don't recompute the
+# full valid-trading-days schedule on every loop tick.
+_holiday_cache = {}
+
 def is_holiday(name: str, today: datetime.date) -> bool:
-    return today in HOLIDAYS.get(name, set())
+    calendar = CALENDARS.get(name)
+    if calendar is None:
+        return False
+
+    cache_key = (name, today.year)
+    if cache_key not in _holiday_cache:
+        schedule = calendar.schedule(start_date=f"{today.year}-01-01", end_date=f"{today.year}-12-31")
+        trading_days = set(schedule.index.date)
+        _holiday_cache[cache_key] = trading_days
+
+    trading_days = _holiday_cache[cache_key]
+    # A "holiday" here means: it's not a normal weekend, but the exchange
+    # still isn't open (i.e. not in the official trading day list).
+    return today not in trading_days
 
 # Tracks last date we pinged for each session/event, keyed by "SessionName-open" / "SessionName-close",
 # so we don't double-send if the loop ticks more than once inside the same minute.
