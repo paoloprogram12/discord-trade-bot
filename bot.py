@@ -2,10 +2,12 @@ import os
 import datetime
 
 import discord
+from discord import app_commands
 from discord.ext import tasks, commands
 from dotenv import load_dotenv
 import pytz
 import pandas_market_calendars as mcal
+import yfinance as yf
 
 load_dotenv()
 
@@ -86,6 +88,58 @@ def is_weekday(local_dt: datetime.datetime) -> bool:
 @bot.command(name="test")
 async def testping(ctx):
     await ctx.send("@everyone this a test")
+
+# Maps common shorthand futures tickers to their Yahoo Finance continuous-
+# contract symbols. Add more here as group trades new products.
+FUTURES_ALIASES = {
+    "ES": "ES=F",   # S&P 500 E-mini
+    "NQ": "NQ=F",   # Nasdaq 100 E-mini
+    "YM": "YM=F",   # Dow E-mini
+    "RTY": "RTY=F", # Russell 2000 E-mini
+    "CL": "CL=F",   # Crude Oil
+    "GC": "GC=F",   # Gold
+    "SI": "SI=F",   # Silver
+    "NG": "NG=F",   # Natural Gas
+    "ZB": "ZB=F",   # 30Y Treasury Bond
+    "6E": "6E=F",   # Euro FX
+    "BTC": "BTC-USD",
+    "ETH": "ETH-USD",
+}
+
+def resolve_symbol(raw_ticker: str) -> str:
+    ticker = raw_ticker.strip().upper()
+    return FUTURES_ALIASES.get(ticker, ticker)
+
+@bot.tree.command(name="price", description="Get the latest price for a future ticker (e.g. ES, NQ, CL, GC)")
+@app_commands.describe(ticker="Ticker symbol, e.g. ES, NQ, CL, GC, BTC")
+async def price(interaction: discord.Interaction, ticker: str):
+    await interaction.response.defer()
+
+    symbol = resolve_symbol(ticker)
+
+    try:
+        data = yf.Ticker(symbol)
+        info = data.fast_info
+        last_price = info["lastPrice"]
+        prev_close = info["previousClose"]
+    except Exception:
+        await interaction.followup.send(
+            f"Couldn't find price data for `{ticker.upper()}`. Double-check the symbol and try again."
+        )
+        return
+
+    change = last_price - prev_close
+    pct_change = (change / prev_close) * 100 if prev_close else 0
+    direction = "🟢" if change >= 0 else "🔴"
+
+    embed = discord.Embed(
+        title=f"{ticker.upper()} ({symbol})",
+        description=f"{direction} **{last_price:,.2f}**  ({change:+,.2f} / {pct_change:+.2f}%)",
+        color=discord.Color.green() if change >= 0 else discord.Color.red(),
+    )
+    embed.set_footer(text="Data via Yahoo Finance — may be delayed")
+
+    await interaction.followup.send(embed=embed)
 
 
 @tasks.loop(seconds=30)
