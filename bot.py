@@ -9,6 +9,10 @@ import pytz
 import pandas_market_calendars as mcal
 import yfinance as yf
 
+# imports for news alerts
+import requests
+import xml.etree.ElementTree as ET
+
 load_dotenv()
 
 TOKEN = os.environ["DISCORD_TOKEN"]
@@ -47,6 +51,26 @@ SESSIONS = [
     },
 ]
 
+# --- High-impact news announcements ---
+#
+# Pulls from the official Fair Economy (ForexFactory's parent company)
+# calendar feed. This is the same feed most trading bots/EAs use — it's
+# meant for exactly this kind of automated consumption, unlike scraping
+# forexfactory.com's own pages directly, which violates their ToS and is
+# fragile since the calendar there is rendered by JavaScript anyway.
+#
+# Caveat: this feed's times reflect whatever timezone the feed defaults
+# to (commonly US/Eastern). If pings look off by a few hours compared to
+# the live calendar on forexfactory.com, adjust NEWS_FEED_TZ below.
+NEWS_FEED_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
+NEWS_FEED_TZ = pytz.timezone("US/Eastern")
+HEADS_UP_MINUTES = 15  # how far ahead of the event to ping
+
+
+# Maps event -> scheduled datetime, so we know what we've already announced
+# and can prune old entries instead of growing forever.
+announced_events = {}
+
 # Each session maps to an official exchange calendar, which
 # pandas_market_calendars keeps updated with published holiday schedules —
 # no manual date maintenance needed.
@@ -80,6 +104,82 @@ def is_holiday(name: str, today: datetime.date) -> bool:
 # so we don't double-send if the loop ticks more than once inside the same minute.
 last_ping_date = {}
 
+# news alerts
+def fetch_high_impact_events():
+    response = requests.get(NEWS_FEED_URL, timeout=10)
+    response.raise_for_status()
+    root = ET.fromstring(response.content)
+
+    events = []
+    for event in root.findall("event"):
+        impact = (event.findtext("impact") or "").strip()
+        if impact != "High":
+            continue
+
+        date_str = (event.findtext("date") or "").strip()
+        time_str = (event.findtext("time") or "").strip()
+        if not date_str or not time_str:
+            continue
+        if time_str.lower() in ("all day", "tentative", "day 1", "day 2"):
+            continue
+
+        try:
+            naive_dt = datetime.datetime.strptime(f"{date_str} {time_str}", "%m-%d-%Y %I:%M%p")
+        except ValueError:
+            continue
+
+        events.append({
+            "title": (event.findtext("title") or "").strip(),
+            "country": (event.findtext("country") or "").strip(),
+            "forecast": (event.findtext("forecast") or "").strip(),
+            "previous": (event.findtext("previous") or "").strip(),
+            "datetime": NEWS_FEED_TZ.localize(naive_dt),
+        })
+    return events
+
+@tasks.loop(minutes=5)
+async def news_watcher():
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel is None:
+        return
+
+    try:
+        events = fetch_high_impact_events()
+    except Exception as e:
+        print(f"Failed to fetch news calendar: {e}")
+        return
+
+    now = datetime.datetime.now(NEWS_FEED_TZ)
+
+    # Prune anything more than a day old so this dict doesn't grow forever
+    stale_cutoff = now - datetime.timedelta(days=1)
+    for key in [k for k, dt in announced_events.items() if dt < stale_cutoff]:
+        del announced_events[key]
+
+    for event in events:
+        key = f"{event['title']}|{event['country']}|{event['datetime'].isoformat()}"
+        if key in announced_events:
+            continue
+
+        minutes_until = (event["datetime"] - now).total_seconds() / 60
+        if 0 <= minutes_until <= HEADS_UP_MINUTES:
+            details = []
+            if event["forecast"]:
+                details.append(f"Forecast: {event['forecast']}")
+            if event["previous"]:
+                details.append(f"Previous: {event['previous']}")
+            detail_text = f" ({' | '.join(details)})" if details else ""
+
+            await channel.send(
+                f"@everyone 🔴 **High-impact news in ~{int(minutes_until)} min** "
+                f"— {event['country']}: {event['title']}{detail_text}"
+            )
+            announced_events[key] = event["datetime"]
+
+
+@news_watcher.before_loop
+async def before_news_watcher():
+    await bot.wait_until_ready()
 
 def is_weekday(local_dt: datetime.datetime) -> bool:
     # Monday = 0 ... Sunday = 6
@@ -196,5 +296,8 @@ async def on_ready():
         print(f"Failed to sync slash commands: {e}")
     if not session_clock.is_running():
         session_clock.start()
+
+    if not news_watcher.is_running():
+        news_watcher.start()
 
 bot.run(TOKEN)
