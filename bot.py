@@ -241,6 +241,76 @@ async def price(interaction: discord.Interaction, ticker: str):
 
     await interaction.followup.send(embed=embed)
 
+@bot.command(name="testnews")
+async def testnews(ctx):
+    """Shows the next few upcoming high-impact events, regardless of the
+    15-minute ping window — lets you verify the feed/parsing works without
+    waiting for a real event to be imminent."""
+    try:
+        events = fetch_high_impact_events()
+    except Exception as e:
+        await ctx.send(f"Failed to fetch the news calendar: `{e}`")
+        return
+
+    now = datetime.datetime.now(NEWS_FEED_TZ)
+    upcoming = sorted(
+        [e for e in events if e["datetime"] > now],
+        key=lambda e: e["datetime"],
+    )[:5]
+
+    if not upcoming:
+        await ctx.send("No upcoming high-impact events found in this week's feed.")
+        return
+
+    lines = ["**Next 5 upcoming high-impact events:**"]
+    for event in upcoming:
+        minutes_until = int((event["datetime"] - now).total_seconds() / 60)
+        hours = minutes_until // 60
+        mins = minutes_until % 60
+        countdown = f"{hours}h {mins}m" if hours else f"{mins}m"
+        lines.append(
+            f"🔴 {event['country']}: **{event['title']}** — "
+            f"{event['datetime'].strftime('%a %b %d, %I:%M %p %Z')} (in {countdown})"
+        )
+
+    await ctx.send("\n".join(lines))
+
+
+@bot.command(name="forcenews")
+async def forcenews(ctx):
+    """Sends a real announcement using the next upcoming high-impact event's
+    actual data, bypassing the 15-minute window — for testing the exact
+    message format that will get sent to @everyone."""
+    try:
+        events = fetch_high_impact_events()
+    except Exception as e:
+        await ctx.send(f"Failed to fetch the news calendar: `{e}`")
+        return
+
+    now = datetime.datetime.now(NEWS_FEED_TZ)
+    upcoming = sorted(
+        [e for e in events if e["datetime"] > now],
+        key=lambda e: e["datetime"],
+    )
+
+    if not upcoming:
+        await ctx.send("No upcoming high-impact events to test with.")
+        return
+
+    event = upcoming[0]
+    minutes_until = int((event["datetime"] - now).total_seconds() / 60)
+
+    details = []
+    if event["forecast"]:
+        details.append(f"Forecast: {event['forecast']}")
+    if event["previous"]:
+        details.append(f"Previous: {event['previous']}")
+    detail_text = f" ({' | '.join(details)})" if details else ""
+
+    await ctx.send(
+        f"[TEST — not a real alert] @everyone 🔴 **High-impact news in ~{minutes_until} min** "
+        f"— {event['country']}: {event['title']}{detail_text}"
+    )
 
 @tasks.loop(seconds=30)
 async def session_clock():
