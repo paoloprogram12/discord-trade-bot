@@ -275,6 +275,31 @@ async def testnews(ctx):
 
     await ctx.send("\n".join(lines))
 
+@bot.command(name="current")
+async def current(ctx):
+    """Sends the current active market session. e.g. (Asia, New York, London)"""
+    active_sessions = []
+
+    for session in SESSIONS:
+        name = session["name"]
+        local_dt = datetime.datetime.now(session["tz"])
+
+        if not is_weekday(local_dt):
+            continue
+
+        today = local_dt.date()
+        if is_holiday(name, today):
+            continue
+
+        current_time = local_dt.time()
+        if session["open"] <= current_time < session["close"]:
+            active_sessions.append(name)
+
+    if active_sessions:
+        await ctx.send(f"Current session(s): {', '.join(active_sessions)}")
+    else:
+        await ctx.send("There are currently no active sessions.")
+
 
 @bot.command(name="forcenews")
 async def forcenews(ctx):
